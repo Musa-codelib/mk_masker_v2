@@ -1,0 +1,24 @@
+Mk_Masker_v2/
+    ├── app/
+    │   ├── index.html
+    │   ├── main.js
+    │   ├── package-lock.json
+    │   ├── package.json
+    │   └── renderer.js
+    ├── bin/
+    │   └── ffmpeg
+    ├── checkpoints/
+    │   └── sam2_hiera_small.pt
+    ├── input_video/
+    ├── output_video/
+    ├── server/
+    │   ├── core/
+    │   │   ├── sam2_hiera_s.yaml
+    │   │   └── sam2_runner.py
+    │   ├── utils/
+    │   │   ├── export.py
+    │   │   ├── paths.py
+    │   │   ├── session.py
+    │   │   └── video_handler.py
+    │   └── server.py
+    └── map_repo.py

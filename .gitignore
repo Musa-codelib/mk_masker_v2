@@ -1,0 +1,53 @@
+# ==========================================
+# 1. Project-Specific Large Files & Binaries
+# ==========================================
+# Ignore the heavy SAM 2 PyTorch model weights
+checkpoints/
+
+# Ignore local system binaries (like ffmpeg)
+bin/
+
+# Ignore video directories (prevent uploading raw/processed media)
+input_video/*
+output_video/*
+
+# Keep the folders on git but ignore their contents (optional helper)
+!input_video/.gitkeep
+!output_video/.gitkeep
+
+
+# ==========================================
+# 2. Python Environment & Junk (Server)
+# ==========================================
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Virtual Environments
+.venv/
+venv/
+ENV/
+
+
+# ==========================================
+# 3. Node.js & Frontend Junk (App)
+# ==========================================
+app/node_modules/
+node_modules/
+input_video/
+output_video/
+.eslintcache
+.DS_Store
+
+
+# ==========================================
+# 4. OS/IDE Specific
+# ==========================================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+.vscode/
+.idea/
