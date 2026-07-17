@@ -1,7 +1,21 @@
+// Mk Masker frontend (renderer process).
+//
+// Connects to the Python SocketIO server at localhost:8080 and drives the whole UI:
+//   - drop a video  -> load_video
+//   - pick a model -> select_model (sam2 = click-to-track, rvm = auto)
+//   - click canvas -> add_click (sam2 only) -> mask_preview overlay
+//   - scrub        -> request_frame -> frame_update
+//   - process btn  -> start_processing -> progress_update / phase_update / process_complete
+//
+// Server -> client events update the canvas, progress bar, phase label, toasts and
+// loading overlay. We keep the raw base64 of the current frame in `lastVideoFrameB64`
+// so a new mask overlay can be drawn on top without re-fetching the frame.
+
 const io = require('socket.io-client');
 const { webUtils } = require('electron');
 const socket = io('http://localhost:8080');
 
+// --- DOM references ---
 const dropZone = document.getElementById('drop-zone');
 const canvas = document.getElementById('v-canvas');
 const ctx = canvas.getContext('2d');
@@ -133,12 +147,14 @@ socket.on('error_alert', (data) => {
     processBtn.disabled = false;
 });
 
+// --- Drag & drop a video file onto the app ---
 document.addEventListener('dragover', (e) => { e.preventDefault(); e.stopPropagation(); dropZone.classList.add('active'); });
 document.addEventListener('dragleave', () => dropZone.classList.remove('active'));
 document.addEventListener('drop', (e) => {
     e.preventDefault(); e.stopPropagation(); dropZone.classList.remove('active');
     const file = e.dataTransfer.files[0];
     if (file) {
+        // Electron gives us the real on-disk path of the dropped file.
         const path = webUtils.getPathForFile(file);
         currentVideoPath = path;
         statusText.innerText = 'Extracting Video...';
@@ -147,11 +163,15 @@ document.addEventListener('drop', (e) => {
     }
 });
 
+// Right-click does nothing on the canvas (avoids the browser context menu getting in the way).
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
+// Click on the canvas = a SAM2 prompt. Left click = foreground, right click = background.
+// Clicks are disabled in RVM mode (it's automatic).
 canvas.addEventListener('mousedown', (e) => {
     if (!currentVideoData || modelSelect.value === 'rvm') return;
 
+    // Map the click position from displayed pixels back to canvas-internal pixels.
     const rect = canvas.getBoundingClientRect();
     const x = (e.clientX - rect.left) * (canvas.width / rect.width);
     const y = (e.clientY - rect.top) * (canvas.height / rect.height);
@@ -163,8 +183,10 @@ canvas.addEventListener('mousedown', (e) => {
     });
 });
 
+// Start the full mask + export job for the currently loaded video.
 processBtn.addEventListener('click', () => {
     if (!currentVideoPath) return;
+    // Output goes next to the source video.
     const outputDir = currentVideoPath.substring(0, currentVideoPath.lastIndexOf('/'));
     processBtn.disabled = true;
     setPhase('Starting…');
@@ -172,6 +194,7 @@ processBtn.addEventListener('click', () => {
     socket.emit('start_processing', { format: modeSelect.value, output_dir: outputDir });
 });
 
+// Draw a frame (and optionally a mask overlay) onto the canvas from base64 data.
 function renderCanvas(videoB64, maskAlphaB64) {
     if (!videoB64) return;
     const videoImg = new Image();
@@ -189,10 +212,9 @@ function renderCanvas(videoB64, maskAlphaB64) {
     videoImg.src = videoB64;
 }
 
-// --- NEW: SCRUBBER INTERACTION ---
+// --- Scrubber: dragging sends the chosen frame index to the server for display ---
 scrubber.oninput = () => {
     const currentFrame = parseInt(scrubber.value);
     document.getElementById('frame-num').innerText = "Frame: " + currentFrame;
-    // Tell Python to send the image for this frame index
     socket.emit('request_frame', { frame: currentFrame });
 };

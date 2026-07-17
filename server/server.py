@@ -1,3 +1,12 @@
+"""Mk Masker backend server.
+
+A SocketIO (aiohttp) server that bridges the Electron frontend and the Python AI
+engines. The frontend emits events (load_video, select_model, add_click,
+start_processing, ...) and the server replies with status / frame / mask / progress
+events. Heavy CPU/GPU work is pushed to a thread pool via run_in_executor so the
+async event loop stays responsive.
+"""
+
 import sys
 from pathlib import Path
 current_dir = Path(__file__).resolve().parent
@@ -19,13 +28,23 @@ sio = socketio.AsyncServer(async_mode='aiohttp', cors_allowed_origins='*')
 app = web.Application(); sio.attach(app)
 
 # --- GLOBAL STATE ---
+# SESSION: per-video metadata for the currently loaded clip.
+# CLICK_MEMORY: user click prompts per frame (SAM2 only).
+# SELECTED_MODEL: "sam2" or "rvm", toggled from the UI.
+# masks_dir: where per-frame mask PNGs are written between preview and export.
 SESSION = {}
-CLICK_MEMORY = {"points": {}, "labels": {}} 
+CLICK_MEMORY = {"points": {}, "labels": {}}
 SELECTED_MODEL = "sam2"
 masks_dir = Path.home() / "Library/Caches/com.mkmasker.pro/masks"
+# Engine singletons, built lazily on first use (models are heavy to load).
 sam2_ann, sam2_run, rvm_run = None, None, None
 
 def _get_ai():
+    """Return the (annotator, runner) pair for the currently selected model.
+
+    Builds the engine on first request and caches it so we don't reload weights on
+    every interaction. For RVM the annotator is None (RVM needs no clicks).
+    """
     global sam2_ann, sam2_run, rvm_run
     if SELECTED_MODEL == "sam2":
         if sam2_ann is None:
@@ -33,7 +52,7 @@ def _get_ai():
             sam2_run = SAM2VideoRunner(variant="small")
         return sam2_ann, sam2_run
     else:
-        if rvm_run is None: 
+        if rvm_run is None:
             rvm_run = RVMRunner(resolve_rvm_checkpoint())
         return None, rvm_run
 
@@ -42,12 +61,15 @@ async def connect(sid, environ): logging.info(f"🟢 Connected: {sid}")
 
 @sio.on('load_video')
 async def handle_load_video(sid, data):
+    """Decode the dropped video into frames and tell the UI it's ready to scrub."""
     global SESSION, CLICK_MEMORY
     await sio.emit('system_status', {'status': 'Extracting Frames...'}, to=sid)
     loop = asyncio.get_running_loop()
+    # Frame extraction is CPU-heavy, so run it off the event loop.
     total_f, fps, w, h, scale = await loop.run_in_executor(None, extract_frames, data['path'])
-    SESSION = {'path': data['path'], 'total_frames': total_f, 'fps': fps, 'width': w, 'height': h, 'scale': scale, 
+    SESSION = {'path': data['path'], 'total_frames': total_f, 'fps': fps, 'width': w, 'height': h, 'scale': scale,
                'frames_dir': Path.home() / "Library/Caches/com.mkmasker.pro/temp_frames"}
+    # Reset per-video state (clicks + any leftover masks).
     CLICK_MEMORY = {"points": {}, "labels": {}}
     if masks_dir.exists(): shutil.rmtree(masks_dir)
     masks_dir.mkdir(parents=True, exist_ok=True)
@@ -57,25 +79,30 @@ async def handle_load_video(sid, data):
 
 @sio.on('select_model')
 async def handle_select_model(sid, data):
+    """Switch between SAM2 (click) and RVM (auto) engines."""
     global SELECTED_MODEL
     SELECTED_MODEL = data.get('model', 'sam2')
 
 @sio.on('request_frame')
 async def handle_request_frame(sid, data):
+    """Return a single decoded frame (used when scrubbing the timeline)."""
     await sio.emit('frame_update', {'frame': data['frame'], 'image_b64': get_frame_base64(data['frame'])}, to=sid)
 
 @sio.on('add_click')
 async def handle_add_click(sid, data):
-    if SELECTED_MODEL == "rvm": return 
+    """SAM2 only: record a click prompt and return the resulting mask overlay."""
+    if SELECTED_MODEL == "rvm": return  # RVM needs no clicks
     global CLICK_MEMORY
     ai_ann, _ = _get_ai(); f_idx = data['frame']
+    # Store the click in full-resolution coords (UI coords * downscale factor).
     CLICK_MEMORY["points"].setdefault(f_idx, []).append([data['x'] * SESSION['scale'], data['y'] * SESSION['scale']])
     CLICK_MEMORY["labels"].setdefault(f_idx, []).append(1 if data['is_positive'] else 0)
     img_path = SESSION['frames_dir'] / f"{f_idx:08d}.jpg"
     ai_ann.set_image(np.array(Image.open(img_path).convert("RGB")), f_idx)
     mask_pil = ai_ann.predict(CLICK_MEMORY["points"][f_idx], CLICK_MEMORY["labels"][f_idx])
     mask_pil.save(masks_dir / f"mask_{f_idx:04d}.png")
-    
+
+    # Build a translucent-blue RGBA overlay so the user sees the current selection.
     full_res_m = mask_pil.resize((SESSION['width'], SESSION['height']), Image.NEAREST); m_np = np.array(full_res_m)
     rgba = np.zeros((m_np.shape[0], m_np.shape[1], 4), dtype=np.uint8)
     rgba[:, :, 2] = 255; rgba[:, :, 3] = (m_np > 0) * 150
@@ -84,10 +111,20 @@ async def handle_add_click(sid, data):
 
 @sio.on('start_processing')
 async def handle_start_processing(sid, data):
+    """Main job: run the selected engine, then export the masked video.
+
+    Two phases:
+      1. Mask generation  - RVM processes every frame, or SAM2 propagates from clicks.
+      2. Export           - ExportPipeline turns masks into the final video (matte ->
+                             RGBA -> ffmpeg encode) for the chosen format.
+    Progress/phase callbacks feed the UI's progress bar and phase label.
+    """
     global CLICK_MEMORY, SELECTED_MODEL
     _, ai_run = _get_ai(); main_loop = asyncio.get_running_loop(); mode = data.get('format', 'prores')
 
+    # --- UI callbacks (run on the async loop from worker threads) ---
     def on_prog(f, t):
+        # Tracking progress is reported as a % of total frames.
         p = int((f/SESSION['total_frames'])*100)
         asyncio.run_coroutine_threadsafe(sio.emit('progress_update', {'percentage': p, 'message': f"Tracking... {f}/{SESSION['total_frames']}"}, to=sid), main_loop)
 
@@ -103,22 +140,24 @@ async def handle_start_processing(sid, data):
     try:
         frame_files = sorted(list(SESSION['frames_dir'].glob("*.jpg")))
         if SELECTED_MODEL == "rvm":
+            # RVM: automatic, no clicks. Process every frame in order.
             ai_run.reset()
             for i, f_path in enumerate(frame_files):
                 mask_np = ai_run.process_frame(cv2.imread(str(f_path)))
                 Image.fromarray(mask_np, mode="L").save(masks_dir / f"mask_{i:04d}.png")
                 if i % 5 == 0: on_prog(i, len(frame_files))
         else:
+            # SAM2: must have at least one user click to seed tracking.
             if not CLICK_MEMORY["points"]: raise NoSelectionError(
                 "No selections found. Click on the subject in the video before processing.")
 
-            # ✅ FIX: Explicitly delete all UI preview masks so ExportPipeline doesn't hit weird artifacts
+            # Drop the live preview masks so the export starts from a clean set.
             for f in masks_dir.glob("mask_*.png"): f.unlink()
 
-            # The runner will now cleanly output mask_0000.png directly
+            # Propagate masks across the whole video (runs in a worker thread).
             await main_loop.run_in_executor(None, ai_run.run_bidirectional, frame_files, CLICK_MEMORY["points"], CLICK_MEMORY["labels"], masks_dir, on_prog)
 
-        # Export Pipeline
+        # --- Export Pipeline ---
         out_path = Path(data['output_dir']) / f"cutout_{Path(SESSION['path']).stem}"
         render_temp = Path.home() / "Library/Caches/com.mkmasker.pro/render_temp"
         if render_temp.exists(): shutil.rmtree(render_temp)
@@ -128,6 +167,7 @@ async def handle_start_processing(sid, data):
         label_hint = "Rendering alpha masks"
         pipeline.render_matte_frames(masks_dir, render_temp, on_progress=on_export_prog, on_phase=on_phase)
         if mode in ["prores", "balanced"]:
+            # These formats need the full RGBA (color + alpha) frames.
             label_hint = "Preparing RGBA frames"
             pipeline.prepare_rgba_frames(SESSION['frames_dir'], render_temp, render_temp, SESSION['total_frames'], on_progress=on_export_prog, on_phase=on_phase)
         label_hint = f"Encoding {mode}"
@@ -137,6 +177,7 @@ async def handle_start_processing(sid, data):
         shutil.rmtree(render_temp)
 
     except Exception as e:
+        # Normalise any failure into a typed payload the UI can show + relay to an editor.
         err = as_mk_error(e)
         logging.error(f"Render Error [{err.code}]: {err.user_message}")
         if err.detail:

@@ -1,3 +1,16 @@
+"""Video export pipeline.
+
+Takes the per-frame masks produced by the AI engines and turns them into a final
+masked video. Three sequential stages:
+
+  1. render_matte_frames  : masks -> clean B&W "matte_*.png" files
+  2. prepare_rgba_frames  : original color + matte -> 4-channel "rgba_*.png" (alpha = mask)
+  3. encode_video         : feeds the PNG sequence to ffmpeg and writes the output file
+
+`on_progress(current, total)` and `on_phase(label)` callbacks let the UI show a
+live progress bar / phase label during the (potentially long) export.
+"""
+
 import subprocess
 from pathlib import Path
 from typing import Callable, Optional
@@ -29,6 +42,7 @@ class ExportPipeline:
                 "No mask frames were produced by the AI engine.",
                 detail=f"Searched {masks_dir} for mask_*.png")
         for i, mask_path in enumerate(mask_files):
+            # Normalise to pure grayscale and re-save with a sequential index.
             matte_img = Image.open(mask_path).convert("L")
             matte_img.save(output_dir / f"matte_{i:04d}.png")
             if on_progress:
@@ -97,6 +111,7 @@ class ExportPipeline:
         input_dir, output_path = Path(input_dir), Path(output_path)
         ffmpeg_bin = resolve_ffmpeg_binary()
 
+        # Build the ffmpeg command for the requested output format.
         if mode == "bw":
             label = "Encoding B&W mask…"
             input_pattern = str(input_dir / "matte_%04d.png")

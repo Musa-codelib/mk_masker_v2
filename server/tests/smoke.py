@@ -31,6 +31,7 @@ from utils.errors import FFmpegMissingError
 
 
 def _make_synthetic_frames(work: Path, n: int = 5):
+    """Create tiny fake orig_*/mask_* PNGs that mimic what the engines would produce."""
     frames_dir = work / "frames"
     masks_dir = work / "masks"
     frames_dir.mkdir(parents=True, exist_ok=True)
@@ -38,16 +39,17 @@ def _make_synthetic_frames(work: Path, n: int = 5):
 
     h = w = 64
     for i in range(n):
-        # orig_{i:08d}.png — solid color frames
+        # orig_{i:08d}.png — solid color frames standing in for real video frames
         orig = np.full((h, w, 3), (i * 10 % 255, 100, 200), dtype=np.uint8)
         Image.fromarray(orig).save(frames_dir / f"orig_{i:08d}.png")
-        # mask_{i:04d}.png — raw AI mask (0/255)
+        # mask_{i:04d}.png — raw AI mask (0/255), alternating so we exercise both branches
         mask = np.full((h, w), 255 if i % 2 == 0 else 0, dtype=np.uint8)
         Image.fromarray(mask, mode="L").save(masks_dir / f"mask_{i:04d}.png")
     return frames_dir, masks_dir
 
 
 def _run_mode(pipeline, mode, work, frames_dir, masks_dir):
+    """Exercise one full export mode and assert each intermediate file exists."""
     render_temp = work / "render_temp"
     if render_temp.exists():
         shutil.rmtree(render_temp)
@@ -58,7 +60,7 @@ def _run_mode(pipeline, mode, work, frames_dir, masks_dir):
     assert (render_temp / "matte_0000.png").exists(), f"[{mode}] matte_0000.png missing"
 
     if mode in ("prores", "balanced"):
-        # Phase 2: orig + matte -> rgba PNGs (the fragile wiring)
+        # Phase 2: orig + matte -> rgba PNGs (the historically fragile wiring)
         pipeline.prepare_rgba_frames(frames_dir, render_temp, render_temp, total_frames=5)
         assert (render_temp / "rgba_0000.png").exists(), f"[{mode}] rgba_0000.png missing"
 

@@ -5,6 +5,14 @@ from pathlib import Path
 from utils.errors import WeightsMissingError, EngineLoadError
 
 class RVMRunner:
+    """Robust Video Matting (RVM) engine.
+
+    Unlike SAM2, RVM is fully automatic: it mattes a human subject from every frame
+    with no user clicks. It keeps recurrent (temporal) state between frames so the
+    result is temporally stable. Each call to process_frame returns a single-channel
+    0-255 alpha mask.
+    """
+
     def __init__(self, model_path: Path):
         self.device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
         
@@ -25,24 +33,25 @@ class RVMRunner:
         self.states = None
 
     def process_frame(self, frame_np):
-        """Processes BGR frame and returns a 0-255 uint8 alpha mask."""
-        # Convert BGR to RGB and normalize to 0.0 - 1.0
+        """Process a single BGR frame and return a 0-255 uint8 alpha mask."""
+        # Convert BGR -> RGB and scale pixel values to the 0.0 - 1.0 range the model expects.
         img = frame_np[:, :, ::-1] / 255.0
+        # Rearrange to CHW and add a batch dimension for PyTorch.
         img = torch.from_numpy(img).permute(2, 0, 1).float().to(self.device).unsqueeze(0)
 
         with torch.no_grad():
-            # Standard downsample ratio for 1080p speed/quality balance
+            # Downsample to 1/4 resolution: good speed/quality trade-off for 1080p.
             ratio = torch.tensor([0.25]).to(self.device)
             
-            # Flexible unpacking to handle any RVM TorchScript version
+            # First frame has no recurrent state; later frames reuse the previous states.
             if self.states is None:
                 out = self.model(img, None, None, None, None, ratio)
             else:
                 out = self.model(img, *self.states, ratio)
             
-            # The last 4 elements are the recurrent states (r1, r2, r3, r4)
+            # Keep the last 4 outputs as the recurrent state for the next frame.
             self.states = out[-4:]
             
-            # Alpha (pha) is always index 1 in the RVM outputs
+            # The alpha (matte) channel is always the 2nd output of RVM.
             alpha_tensor = out[1]
             return (alpha_tensor.cpu().numpy()[0, 0] * 255).astype(np.uint8)

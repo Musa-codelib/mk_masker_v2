@@ -1,5 +1,9 @@
 """
-Session handoff contracts for standalone (DaVinci Free) workflow.
+Session handoff contracts for the standalone (DaVinci Resolve Free) workflow.
+
+NOTE: the Electron app's live processing path (server.py -> ExportPipeline) does NOT
+use this module. It is retained for the older Resolve-based integration that exchanges
+`session.json` / `done.json` files. Kept for compatibility/reference only.
 """
 
 from __future__ import annotations
@@ -10,12 +14,14 @@ from pathlib import Path
 from typing import Any
 
 
+# State files live in the user's home folder, isolated from the project.
 STATE_DIR = Path.home() / ".kvn_rotoscope"
 DEFAULT_SESSION_PATH = STATE_DIR / "session.json"
 DEFAULT_DONE_PATH = STATE_DIR / "done.json"
 
 
 def _ensure_parent(path: Path) -> None:
+    # Create the parent directory so subsequent writes don't fail.
     path.parent.mkdir(parents=True, exist_ok=True)
 
 
