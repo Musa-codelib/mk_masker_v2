@@ -10,6 +10,18 @@ const processBtn = document.getElementById('process-btn');
 const modeSelect = document.getElementById('mode');
 const statusText = document.getElementById('status-text');
 const statusDot = document.getElementById('status-dot');
+const modelSelect = document.getElementById('model-select');
+
+// Tell Python which AI model is selected (SAM2 vs RVM)
+modelSelect.addEventListener('change', () => {
+    socket.emit('select_model', { model: modelSelect.value });
+    if (modelSelect.value === 'rvm') {
+        statusText.innerText = 'Auto-Human Mode (No clicks needed)';
+    } else {
+        statusText.innerText = 'SAM2 Mode (Click to Track)';
+    }
+});
+
 
 let currentVideoData = null;
 let currentVideoPath = null;
@@ -70,7 +82,8 @@ document.addEventListener('drop', (e) => {
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
 canvas.addEventListener('mousedown', (e) => {
-    if (!currentVideoData) return;
+    if (!currentVideoData || modelSelect.value === 'rvm') return;
+
     const rect = canvas.getBoundingClientRect();
     const x = (e.clientX - rect.left) * (canvas.width / rect.width);
     const y = (e.clientY - rect.top) * (canvas.height / rect.height);

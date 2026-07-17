@@ -23,16 +23,31 @@ class ExportPipeline:
         """Merges original color PNGs with masks into 4-channel RGBA PNGs"""
         output_dir.mkdir(parents=True, exist_ok=True)
         for i in range(total_frames):
-            orig = cv2.imread(str(frames_dir / f"orig_{i:08d}.png"))
-            mask = cv2.imread(str(masks_dir / f"matte_{i:04d}.png"), cv2.IMREAD_GRAYSCALE)
-            
+            orig_path = frames_dir / f"orig_{i:08d}.png"
+            matte_path = masks_dir / f"matte_{i:04d}.png"
+
+            orig = cv2.imread(str(orig_path))
+            if orig is None:
+                # Write a fully transparent black frame if originals are missing.
+                # This prevents FFmpeg from producing broken/blank output.
+                black = np.zeros((SESSION_HEIGHT := 1, SESSION_WIDTH := 1), dtype=np.uint8)
+                # We don't know exact size; but FFmpeg will still fail if sizes vary.
+                # So we require orig to exist; if it doesn't, raise a clear error.
+                raise FileNotFoundError(f"Missing original frame for RGBA export: {orig_path}")
+
+            mask = cv2.imread(str(matte_path), cv2.IMREAD_GRAYSCALE)
+            if mask is None:
+                # If matte is missing for a frame, make it transparent.
+                mask = np.zeros((orig.shape[0], orig.shape[1]), dtype=np.uint8)
+
             # Ensure mask matches frame size
             if mask.shape[:2] != orig.shape[:2]:
                 mask = cv2.resize(mask, (orig.shape[1], orig.shape[0]), interpolation=cv2.INTER_LINEAR)
-            
+
             b, g, r = cv2.split(orig)
             rgba = cv2.merge([b, g, r, mask])
             cv2.imwrite(str(output_dir / f"rgba_{i:04d}.png"), rgba)
+
 
     def encode_video(self, input_dir: Path, output_path: Path, fps: float, mode: str) -> Path:
         """Universal FFmpeg dispatcher"""

@@ -8,11 +8,13 @@ Mk_Masker_v2/
     ├── bin/
     │   └── ffmpeg
     ├── checkpoints/
+    │   ├── rvm_mobilenetv3.pth
     │   └── sam2_hiera_small.pt
     ├── input_video/
     ├── output_video/
     ├── server/
     │   ├── core/
+    │   │   ├── rvm_runner.py
     │   │   ├── sam2_hiera_s.yaml
     │   │   └── sam2_runner.py
     │   ├── utils/
@@ -21,4 +23,5 @@ Mk_Masker_v2/
     │   │   ├── session.py
     │   │   └── video_handler.py
     │   └── server.py
+    ├── .gitignore
     └── map_repo.py

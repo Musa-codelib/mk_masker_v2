@@ -20,9 +20,18 @@
 </head>
 <body>
     <div id="sidebar">
-        <h1 style="margin: 0; color: #2ecc71;">Mk Pro</h1>
+        <h1 style="margin: 0; color: #ffb700;">Mk Pro</h1>
         <div class="status-bar"><div id="status-dot" class="dot"></div> <span id="status-text">Connecting to Engine...</span></div>
         <hr style="border: 0; border-top: 1px solid #333; width: 100%;">
+        
+                <!-- ✅ ADD THIS BLOCK BELOW THE LOGO/STATUS -->
+        <div style="font-size: 14px;">
+            <label style="display: block; margin-bottom: 8px; color: #888;">AI MODEL</label>
+            <select id="model-select" style="width: 100%; background: #333; color: white; border: 1px solid #444; padding: 8px; border-radius: 4px;">
+                <option value="sam2">SAM2 (Click to Track)</option>
+                <option value="rvm">RVM (Auto-Human)</option>
+            </select>
+        </div>
         
         <div style="font-size: 14px;">
             <label style="display: block; margin-bottom: 8px; color: #888;">EXPORT MODE</label>

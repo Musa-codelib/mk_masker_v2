@@ -4,6 +4,7 @@ import numpy as np
 from pathlib import Path
 from PIL import Image
 from typing import Optional, List
+import shutil
 from utils.paths import resolve_sam2_checkpoint, resolve_sam2_config
 from hydra import compose, initialize_config_dir
 
@@ -35,7 +36,11 @@ class SAM2ImageAnnotator:
     def predict(self, points: list, labels: list) -> Image:
         with torch.inference_mode():
             torch.mps.synchronize()
-            masks, _, _ = self.predictor.predict(point_coords=np.array(points, dtype=np.float32), point_labels=np.array(labels, dtype=np.int32), multimask_output=False)
+            masks, _, _ = self.predictor.predict(
+                point_coords=np.array(points, dtype=np.float32), 
+                point_labels=np.array(labels, dtype=np.int32), 
+                multimask_output=False
+            )
             torch.mps.synchronize()
         return Image.fromarray((masks[0] > 0).astype(np.uint8) * 255, mode="L")
 
@@ -63,34 +68,82 @@ class SAM2VideoRunner:
         config_name = "sam2_hiera_s.yaml"
         self.predictor = build_sam2_video_predictor(config_name, str(self.checkpoint_path), device=self.device)
 
-    def run_bidirectional(self, frame_files, seed_idx, points, labels, output_dir, on_progress=None):
-        """ ✅ v1.2 LOGIC: Single state, two directions, anchored to Hero Points """
-        total = len(frame_files)
+    def run_bidirectional(self, frame_files, points_dict, labels_dict, output_dir, on_progress=None):
+        """ ✅ 50-Frame Chunking with Hidden State Handoff """
+        total_frames = len(frame_files)
+        CHUNK_SIZE = 50
+        seed_frame = sorted(points_dict.keys())[0]
+        work_chunk_dir = frame_files[0].parent.parent / "_working_chunk"
+
+        tracked_segments = {}
+
+        def run_partition(start_idx, end_idx, direction="forward", mask_handoff=None):
+            if work_chunk_dir.exists(): shutil.rmtree(work_chunk_dir)
+            work_chunk_dir.mkdir()
+            
+            for i in range(start_idx, end_idx):
+                shutil.copy(str(frame_files[i]), work_chunk_dir)
+            
+            p_state = self.predictor.init_state(video_path=str(work_chunk_dir), async_loading_frames=False)
+            p_state["images"] = _LazyFrameLoader([str(work_chunk_dir / f"{i:08d}.jpg") for i in range(start_idx, end_idx)], self.predictor.image_size)
+            p_state["num_frames"] = end_idx - start_idx
+            
+            # Apply clicks if they fall inside this partition
+            for f_idx in points_dict:
+                if start_idx <= f_idx < end_idx:
+                    self.predictor.add_new_points_or_box(
+                        p_state, f_idx - start_idx, 1, 
+                        np.array(points_dict[f_idx], dtype=np.float32), 
+                        np.array(labels_dict[f_idx], dtype=np.int32)
+                    )
+            
+            # Apply hidden state handshake from previous partition
+            if mask_handoff is not None:
+                h_idx = 0 if direction == "forward" else (end_idx - start_idx - 1)
+                self.predictor.add_new_mask(p_state, h_idx, 1, mask_handoff)
+
+            # Propagate
+            is_rev = (direction == "backward")
+            for o_idx, _, o_logits in self.predictor.propagate_in_video(p_state, reverse=is_rev):
+                torch.mps.synchronize()
+                binary = (o_logits[0, 0] > 0.0).cpu().numpy().astype(np.uint8) * 255
+                global_idx = start_idx + o_idx
+                
+                # Save cleanly to the masks_dir directly
+                Image.fromarray(binary, "L").save(output_dir / f"mask_{global_idx:04d}.png")
+                tracked_segments[global_idx] = True
+                
+                if on_progress: on_progress(len(tracked_segments), total_frames)
+
+            # Get mask for handoff to the next iteration
+            next_h = (o_logits[0, 0] > 0.0).cpu().numpy()
+            
+            self.predictor.reset_state(p_state)
+            torch.mps.empty_cache()
+            return next_h
+
         with torch.inference_mode():
-            # 1. Initialize ONE brain for the whole video
-            state = self.predictor.init_state(video_path=str(frame_files[0].parent), async_loading_frames=False)
-            state["images"] = _LazyFrameLoader([str(f) for f in frame_files], self.predictor.image_size)
-            state["num_frames"] = total
+            curr_h = None
+            # Forward Pass
+            for s in range(seed_frame, total_frames, CHUNK_SIZE):
+                curr_h = run_partition(s, min(s + CHUNK_SIZE, total_frames), "forward", curr_h)
+            
+            # Backward Pass
+            # Read the seed mask we just created to initiate backward tracking safely
+            seed_mask_img = Image.open(output_dir / f"mask_{seed_frame:04d}.png")
+            curr_h = (np.array(seed_mask_img) > 127)
+            
+            prev_s = seed_frame
+            for s in range(seed_frame - CHUNK_SIZE, -CHUNK_SIZE, -CHUNK_SIZE):
+                real_s = max(0, s)
+                if real_s < prev_s:
+                    curr_h = run_partition(real_s, prev_s, "backward", curr_h)
+                    prev_s = real_s
 
-            # 2. Anchor the brain to your manual selection (Hero Points)
-            self.predictor.add_new_points_or_box(
-                inference_state=state, frame_idx=seed_idx, obj_id=1,
-                points=np.array(points, dtype=np.float32),
-                labels=np.array(labels, dtype=np.int32)
-            )
-
-            # 3. PASS 1: Radiate Forward from Seed
-            for f_idx, _, mask_logits in self.predictor.propagate_in_video(state, start_frame_idx=seed_idx):
-                torch.mps.synchronize()
-                binary = (mask_logits[0, 0] > 0.0).cpu().numpy().astype(np.uint8) * 255
-                Image.fromarray(binary, "L").save(output_dir / f"mask_{f_idx:04d}.png")
-                if on_progress: on_progress(f_idx, total)
-
-            # 4. PASS 2: Radiate Backward from Seed
-            for f_idx, _, mask_logits in self.predictor.propagate_in_video(state, start_frame_idx=seed_idx, reverse=True):
-                torch.mps.synchronize()
-                binary = (mask_logits[0, 0] > 0.0).cpu().numpy().astype(np.uint8) * 255
-                Image.fromarray(binary, "L").save(output_dir / f"mask_{f_idx:04d}.png")
-                if on_progress: on_progress(f_idx, total)
-
-            self.predictor.reset_state(state); torch.mps.empty_cache()
+        # Blank out untracked frames just in case
+        blank = np.zeros((self.predictor.image_size, self.predictor.image_size), dtype=np.uint8)
+        for i in range(total_frames):
+            if i not in tracked_segments:
+                Image.fromarray(blank, "L").save(output_dir / f"mask_{i:04d}.png")
+        
+        if work_chunk_dir.exists(): shutil.rmtree(work_chunk_dir)

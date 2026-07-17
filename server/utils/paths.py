@@ -5,6 +5,8 @@ import shutil
 import subprocess
 from typing import Callable
 
+
+
 def get_project_root() -> Path:
     return Path(__file__).resolve().parent.parent.parent
 
@@ -13,6 +15,9 @@ def get_data_dir() -> Path:
 
 def get_weights_dir() -> Path:
     return get_project_root() / "checkpoints"
+
+def resolve_rvm_checkpoint() -> Path:
+    return get_weights_dir() / "rvm_mobilenetv3.pth"
 
 # ✅ UPDATED REGISTRY TO MATCH YOUR FILE
 SAM2_MODELS: dict[str, dict] = {

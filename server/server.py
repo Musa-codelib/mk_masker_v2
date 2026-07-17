@@ -3,10 +3,13 @@ from pathlib import Path
 current_dir = Path(__file__).resolve().parent
 if str(current_dir) not in sys.path: sys.path.insert(0, str(current_dir))
 
-import socketio, asyncio, os, shutil, numpy as np, base64, io, logging, re
+import socketio, asyncio, os, shutil, numpy as np, base64, io, logging, re, cv2
 from aiohttp import web
 from PIL import Image
+
 from core.sam2_runner import SAM2ImageAnnotator, SAM2VideoRunner
+from core.rvm_runner import RVMRunner
+from utils.paths import resolve_rvm_checkpoint
 from utils.video_handler import extract_frames, get_frame_base64
 from utils.export import ExportPipeline
 
@@ -17,20 +20,24 @@ app = web.Application(); sio.attach(app)
 # --- GLOBAL STATE ---
 SESSION = {}
 CLICK_MEMORY = {"points": {}, "labels": {}} 
+SELECTED_MODEL = "sam2"
 masks_dir = Path.home() / "Library/Caches/com.mkmasker.pro/masks"
-annotator = None
-video_runner = None
+sam2_ann, sam2_run, rvm_run = None, None, None
 
 def _get_ai():
-    global annotator, video_runner
-    if annotator is None:
-        annotator = SAM2ImageAnnotator(variant="small")
-        video_runner = SAM2VideoRunner(variant="small")
-    return annotator, video_runner
+    global sam2_ann, sam2_run, rvm_run
+    if SELECTED_MODEL == "sam2":
+        if sam2_ann is None:
+            sam2_ann = SAM2ImageAnnotator(variant="small")
+            sam2_run = SAM2VideoRunner(variant="small")
+        return sam2_ann, sam2_run
+    else:
+        if rvm_run is None: 
+            rvm_run = RVMRunner(resolve_rvm_checkpoint())
+        return None, rvm_run
 
 @sio.event
-async def connect(sid, environ):
-    logging.info(f"🟢 Connected: {sid}")
+async def connect(sid, environ): logging.info(f"🟢 Connected: {sid}")
 
 @sio.on('load_video')
 async def handle_load_video(sid, data):
@@ -43,17 +50,22 @@ async def handle_load_video(sid, data):
     CLICK_MEMORY = {"points": {}, "labels": {}}
     if masks_dir.exists(): shutil.rmtree(masks_dir)
     masks_dir.mkdir(parents=True, exist_ok=True)
-    ai_ann, _ = _get_ai(); ai_ann.clear_cache()
+    ai_ann, _ = _get_ai()
+    if ai_ann: ai_ann.clear_cache()
     await sio.emit('video_loaded', {'total_frames': total_f, 'fps': fps, 'width': w, 'height': h, 'first_frame_b64': get_frame_base64(0)}, to=sid)
-    await sio.emit('system_status', {'status': 'Ready'}, to=sid)
+
+@sio.on('select_model')
+async def handle_select_model(sid, data):
+    global SELECTED_MODEL
+    SELECTED_MODEL = data.get('model', 'sam2')
 
 @sio.on('request_frame')
 async def handle_request_frame(sid, data):
-    f_idx = data.get('frame', 0)
-    await sio.emit('frame_update', {'frame': f_idx, 'image_b64': get_frame_base64(f_idx)}, to=sid)
+    await sio.emit('frame_update', {'frame': data['frame'], 'image_b64': get_frame_base64(data['frame'])}, to=sid)
 
 @sio.on('add_click')
 async def handle_add_click(sid, data):
+    if SELECTED_MODEL == "rvm": return 
     global CLICK_MEMORY
     ai_ann, _ = _get_ai(); f_idx = data['frame']
     CLICK_MEMORY["points"].setdefault(f_idx, []).append([data['x'] * SESSION['scale'], data['y'] * SESSION['scale']])
@@ -69,56 +81,45 @@ async def handle_add_click(sid, data):
     buf = io.BytesIO(); Image.fromarray(rgba, mode="RGBA").save(buf, format="PNG")
     await sio.emit('mask_preview', {'frame': f_idx, 'mask_alpha_b64': f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode('utf-8')}"}, to=sid)
 
-# ... (imports and global state stay exactly same as last stable) ...
-
 @sio.on('start_processing')
 async def handle_start_processing(sid, data):
-    global CLICK_MEMORY
-    _, runner = _get_ai(); main_loop = asyncio.get_running_loop()
-    
-    # UI selected format (prores, balanced, bw)
-    mode = data.get('format', 'prores')
-    
+    global CLICK_MEMORY, SELECTED_MODEL
+    _, ai_run = _get_ai(); main_loop = asyncio.get_running_loop(); mode = data.get('format', 'prores')
     def on_prog(f, t):
         p = int((f/SESSION['total_frames'])*100)
         asyncio.run_coroutine_threadsafe(sio.emit('progress_update', {'percentage': p, 'message': f"Tracking... {f}/{SESSION['total_frames']}"}, to=sid), main_loop)
 
     try:
-        if not CLICK_MEMORY["points"]: raise ValueError("No selections found.")
-        seed_frame = sorted(CLICK_MEMORY["points"].keys())[0]
-        points, labels = CLICK_MEMORY["points"][seed_frame], CLICK_MEMORY["labels"][seed_frame]
         frame_files = sorted(list(SESSION['frames_dir'].glob("*.jpg")))
-        
-        # 1. AI Tracking
-        await main_loop.run_in_executor(None, runner.run_bidirectional, frame_files, seed_frame, points, labels, masks_dir, on_prog)
+        if SELECTED_MODEL == "rvm":
+            ai_run.reset()
+            for i, f_path in enumerate(frame_files):
+                mask_np = ai_run.process_frame(cv2.imread(str(f_path)))
+                Image.fromarray(mask_np, mode="L").save(masks_dir / f"mask_{i:04d}.png")
+                if i % 5 == 0: on_prog(i, len(frame_files))
+        else:
+            if not CLICK_MEMORY["points"]: raise ValueError("No selections found.")
+            
+            # ✅ FIX: Explicitly delete all UI preview masks so ExportPipeline doesn't hit weird artifacts
+            for f in masks_dir.glob("mask_*.png"): f.unlink()
+            
+            # The runner will now cleanly output mask_0000.png directly
+            await main_loop.run_in_executor(None, ai_run.run_bidirectional, frame_files, CLICK_MEMORY["points"], CLICK_MEMORY["labels"], masks_dir, on_prog)
 
-        # 2. Workspace Setup
+        # Export Pipeline
         out_path = Path(data['output_dir']) / f"cutout_{Path(SESSION['path']).stem}"
         render_temp = Path.home() / "Library/Caches/com.mkmasker.pro/render_temp"
         if render_temp.exists(): shutil.rmtree(render_temp)
         render_temp.mkdir(parents=True)
         
         pipeline = ExportPipeline()
-        
-        # 3. Step A: Create clean matte sequence
-        await sio.emit('progress_update', {'percentage': 92, 'message': "Cleaning Matte Frames..."}, to=sid)
         pipeline.render_matte_frames(masks_dir, render_temp)
-        
-        # 4. Step B: Handle Alpha Merging if needed
-        if mode in ["prores", "balanced"]:
-            await sio.emit('progress_update', {'percentage': 95, 'message': "Merging Alpha Channel..."}, to=sid)
-            pipeline.prepare_rgba_frames(SESSION['frames_dir'], render_temp, render_temp, SESSION['total_frames'])
-        
-        # 5. Final Encode
-        await sio.emit('progress_update', {'percentage': 98, 'message': f"Encoding {mode.upper()}..."}, to=sid)
+        if mode in ["prores", "balanced"]: pipeline.prepare_rgba_frames(SESSION['frames_dir'], render_temp, render_temp, SESSION['total_frames'])
         final_file = pipeline.encode_video(render_temp, out_path, SESSION['fps'], mode)
-        
         await sio.emit('process_complete', {'output_files': [str(final_file)]}, to=sid)
         shutil.rmtree(render_temp)
         
     except Exception as e:
-        logging.error(e); await sio.emit('error_alert', {'message': str(e)}, to=sid)
-
-# ... (main entry point same as last stable) ...
+        logging.error(f"Render Error: {e}"); await sio.emit('error_alert', {'message': str(e)}, to=sid)
 
 if __name__ == '__main__': web.run_app(app, port=8080)
