@@ -5,39 +5,72 @@ from PIL import Image
 import cv2
 import numpy as np
 from utils.paths import resolve_ffmpeg_binary
+from utils.errors import FFmpegFailedError, FrameMissingError
+
+# on_progress signature: (current: int, total: int) -> None
+ProgressCb = Optional[Callable[[int, int], None]]
+# on_phase signature: (label: str) -> None  (one-shot phase change notification)
+PhaseCb = Optional[Callable[[str], None]]
+
 
 class ExportPipeline:
-    def render_matte_frames(self, masks_dir: Path, output_dir: Path, on_progress: Optional[Callable[[int, int], None]] = None) -> Path:
-        """Converts raw AI masks to clean sequential B&W PNGs"""
+    def render_matte_frames(self, masks_dir: Path, output_dir: Path,
+                            on_progress: ProgressCb = None,
+                            on_phase: PhaseCb = None) -> Path:
+        """Converts raw AI masks to clean sequential B&W PNGs (matte_*.png)."""
         masks_dir, output_dir = Path(masks_dir), Path(output_dir)
+        if on_phase:
+            on_phase("Rendering alpha masks…")
         output_dir.mkdir(parents=True, exist_ok=True)
         mask_files = sorted(masks_dir.glob("mask_*.png"))
         total = len(mask_files)
+        if total == 0:
+            raise FrameMissingError(
+                "No mask frames were produced by the AI engine.",
+                detail=f"Searched {masks_dir} for mask_*.png")
         for i, mask_path in enumerate(mask_files):
             matte_img = Image.open(mask_path).convert("L")
             matte_img.save(output_dir / f"matte_{i:04d}.png")
-            if on_progress: on_progress(i, total)
+            if on_progress:
+                on_progress(i + 1, total)
         return output_dir
 
-    def prepare_rgba_frames(self, frames_dir: Path, masks_dir: Path, output_dir: Path, total_frames: int):
-        """Merges original color PNGs with masks into 4-channel RGBA PNGs"""
-        output_dir.mkdir(parents=True, exist_ok=True)
+    def prepare_rgba_frames(self, frames_dir: Path, matte_dir: Path, rgba_dir: Path,
+                            total_frames: int,
+                            on_progress: ProgressCb = None,
+                            on_phase: PhaseCb = None) -> Path:
+        """Merges original color PNGs with mattes into 4-channel RGBA PNGs.
+
+        Args:
+            frames_dir: directory containing orig_{i:08d}.png (full-res source).
+            matte_dir:  directory containing matte_{i:04d}.png (from render_matte_frames).
+            rgba_dir:   output directory for rgba_{i:04d}.png.
+        """
+        frames_dir, matte_dir, rgba_dir = Path(frames_dir), Path(matte_dir), Path(rgba_dir)
+        if on_phase:
+            on_phase("Preparing RGBA frames…")
+        rgba_dir.mkdir(parents=True, exist_ok=True)
+
+        # Guard: the matte sequence must exist before we merge.
+        first_matte = matte_dir / "matte_0000.png"
+        if not first_matte.exists():
+            raise FrameMissingError(
+                "Matte frames missing before RGBA merge.",
+                detail=f"Expected {first_matte}")
+
         for i in range(total_frames):
             orig_path = frames_dir / f"orig_{i:08d}.png"
-            matte_path = masks_dir / f"matte_{i:04d}.png"
+            matte_path = matte_dir / f"matte_{i:04d}.png"
 
             orig = cv2.imread(str(orig_path))
             if orig is None:
-                # Write a fully transparent black frame if originals are missing.
-                # This prevents FFmpeg from producing broken/blank output.
-                black = np.zeros((SESSION_HEIGHT := 1, SESSION_WIDTH := 1), dtype=np.uint8)
-                # We don't know exact size; but FFmpeg will still fail if sizes vary.
-                # So we require orig to exist; if it doesn't, raise a clear error.
-                raise FileNotFoundError(f"Missing original frame for RGBA export: {orig_path}")
+                raise FrameMissingError(
+                    "Missing original frame for RGBA export.",
+                    detail=str(orig_path))
 
             mask = cv2.imread(str(matte_path), cv2.IMREAD_GRAYSCALE)
             if mask is None:
-                # If matte is missing for a frame, make it transparent.
+                # If matte is missing for a frame, make it fully transparent.
                 mask = np.zeros((orig.shape[0], orig.shape[1]), dtype=np.uint8)
 
             # Ensure mask matches frame size
@@ -46,32 +79,52 @@ class ExportPipeline:
 
             b, g, r = cv2.split(orig)
             rgba = cv2.merge([b, g, r, mask])
-            cv2.imwrite(str(output_dir / f"rgba_{i:04d}.png"), rgba)
+            cv2.imwrite(str(rgba_dir / f"rgba_{i:04d}.png"), rgba)
+            if on_progress:
+                on_progress(i + 1, total_frames)
 
+        return rgba_dir
 
-    def encode_video(self, input_dir: Path, output_path: Path, fps: float, mode: str) -> Path:
-        """Universal FFmpeg dispatcher"""
+    def encode_video(self, input_dir: Path, output_path: Path, fps: float, mode: str,
+                     on_phase: PhaseCb = None) -> Path:
+        """Universal FFmpeg dispatcher.
+
+        mode:
+            "bw"        -> Grayscale MP4 (matte only)
+            "balanced"  -> H.265 / HEVC with alpha (macOS VideoToolbox)
+            "prores"    -> ProRes 4444 with alpha (macOS VideoToolbox)
+        """
+        input_dir, output_path = Path(input_dir), Path(output_path)
         ffmpeg_bin = resolve_ffmpeg_binary()
-        
+
         if mode == "bw":
-            # Grayscale MP4 (Mask Only)
+            label = "Encoding B&W mask…"
             input_pattern = str(input_dir / "matte_%04d.png")
+            out_file = output_path.with_suffix(".mp4")
             cmd = [ffmpeg_bin, "-y", "-framerate", str(fps), "-i", input_pattern,
-                   "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "18", str(output_path.with_suffix(".mp4"))]
-        
+                   "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "18",
+                   str(out_file)]
         elif mode == "balanced":
-            # H.265 with Alpha (HEVC)
+            label = "Encoding H.265 (alpha)…"
             input_pattern = str(input_dir / "rgba_%04d.png")
+            out_file = output_path.with_suffix(".mov")
             cmd = [ffmpeg_bin, "-y", "-framerate", str(fps), "-i", input_pattern,
-                   "-c:v", "hevc_videotoolbox", "-alpha_quality", "0.75", "-tag:v", "hvc1", str(output_path.with_suffix(".mov"))]
-        
+                   "-c:v", "hevc_videotoolbox", "-alpha_quality", "0.75", "-tag:v", "hvc1",
+                   str(out_file)]
         else:
-            # ProRes 4444 (High Quality Alpha)
+            label = "Encoding ProRes 4444 (alpha)…"
             input_pattern = str(input_dir / "rgba_%04d.png")
+            out_file = output_path.with_suffix(".mov")
             cmd = [ffmpeg_bin, "-y", "-framerate", str(fps), "-i", input_pattern,
-                   "-c:v", "prores_videotoolbox", "-profile:v", "4", "-pix_fmt", "ayuv64le", str(output_path.with_suffix(".mov"))]
+                   "-c:v", "prores_videotoolbox", "-profile:v", "4", "-pix_fmt", "ayuv64le",
+                   str(out_file)]
+
+        if on_phase:
+            on_phase(label)
 
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
-            raise RuntimeError(f"FFmpeg failed: {result.stderr}")
-        return output_path
+            raise FFmpegFailedError(
+                f"FFmpeg failed while {label}",
+                detail=result.stderr[-2000:] if result.stderr else "No stderr captured.")
+        return out_file

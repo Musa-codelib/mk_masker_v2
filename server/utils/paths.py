@@ -5,6 +5,8 @@ import shutil
 import subprocess
 from typing import Callable
 
+from utils.errors import FFmpegMissingError, WeightsMissingError
+
 
 
 def get_project_root() -> Path:
@@ -17,7 +19,12 @@ def get_weights_dir() -> Path:
     return get_project_root() / "checkpoints"
 
 def resolve_rvm_checkpoint() -> Path:
-    return get_weights_dir() / "rvm_mobilenetv3.pth"
+    path = get_weights_dir() / "rvm_mobilenetv3.pth"
+    if not path.exists():
+        raise WeightsMissingError(
+            "RVM weights missing.",
+            detail=f"Expected {path}")
+    return path
 
 # ✅ UPDATED REGISTRY TO MATCH YOUR FILE
 SAM2_MODELS: dict[str, dict] = {
@@ -36,7 +43,12 @@ def get_sam2_model_info(variant: str) -> dict:
 
 def resolve_sam2_checkpoint(variant: str) -> Path:
     info = get_sam2_model_info(variant)
-    return get_weights_dir() / info["filename"]
+    path = get_weights_dir() / info["filename"]
+    if not path.exists():
+        raise WeightsMissingError(
+            f"SAM2 ({variant}) weights missing.",
+            detail=f"Expected {path}")
+    return path
 
 def resolve_sam2_config(variant: str) -> str:
     return get_sam2_model_info(variant)["cfg"]
@@ -50,7 +62,9 @@ def resolve_ffmpeg_binary() -> str:
     if bundled.exists() and os.access(bundled, os.X_OK):
         return str(bundled)
     
-    raise RuntimeError("FFmpeg not found. Run 'brew install ffmpeg'.")
+    raise FFmpegMissingError(
+        "FFmpeg not found.",
+        detail="Run 'brew install ffmpeg' or place an ffmpeg binary in bin/.")
 
 
 def resolve_ffprobe_binary() -> str:

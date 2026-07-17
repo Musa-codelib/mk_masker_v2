@@ -2,20 +2,21 @@ import torch
 import numpy as np
 from PIL import Image
 from pathlib import Path
+from utils.errors import WeightsMissingError, EngineLoadError
 
 class RVMRunner:
     def __init__(self, model_path: Path):
         self.device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
         
         if not model_path.exists():
-            raise FileNotFoundError(f"RVM weights missing: {model_path}")
+            raise WeightsMissingError("RVM weights missing.", detail=str(model_path))
 
         try:
             # Load the TorchScript model
             self.model = torch.jit.load(str(model_path), map_location='cpu').to(self.device).eval()
             print(f"✅ RVM Engine Loaded on {self.device}")
         except Exception as e:
-            raise RuntimeError(f"RVM Loading Failed: {e}")
+            raise EngineLoadError("RVM model failed to load.", detail=str(e))
             
         self.states = None 
 

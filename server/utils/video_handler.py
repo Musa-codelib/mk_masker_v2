@@ -7,6 +7,7 @@ import numpy as np
 import io
 from pathlib import Path
 from PIL import Image
+from utils.errors import EmptyVideoError, UnsupportedVideoError
 
 # ✅ HIDDEN CACHE PATH
 CACHE_DIR = Path.home() / "Library" / "Caches" / "com.mkmasker.pro"
@@ -19,6 +20,10 @@ def setup_workspace():
 
 def get_video_metadata(video_path):
     cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        raise UnsupportedVideoError(
+            "Could not open the video file.",
+            detail=str(video_path))
     fps = cap.get(cv2.CAP_PROP_FPS)
     w, h, count = int(cap.get(3)), int(cap.get(4)), int(cap.get(7))
     cap.release()
@@ -27,6 +32,11 @@ def get_video_metadata(video_path):
 def extract_frames(video_path):
     setup_workspace()
     fps, orig_w, orig_h, total_frames = get_video_metadata(video_path)
+
+    if total_frames <= 0 or orig_w <= 0 or orig_h <= 0:
+        raise EmptyVideoError(
+            "The video has no readable frames.",
+            detail=f"fps={fps}, size={orig_w}x{orig_h}, frames={total_frames}")
     
     # AI Scale logic
     scale = min(1.0, 1024 / max(orig_w, orig_h))
@@ -82,6 +92,8 @@ def get_frame_base64(frame_idx, mask_np=None):
     img_str = base64.b64encode(buffered.getvalue()).decode('utf-8')
     return f"data:image/png;base64,{img_str}"
 
+# DEPRECATED: superseded by utils.export.ExportPipeline + server.handle_start_processing.
+# Kept for reference only. Do NOT route new processing through this function.
 def compile_output_video(all_segments, original_video_path, output_dir, mode, fps, total_frames, orig_w, orig_h, progress_callback=None):
     output_dir = Path(output_dir)
     target_name = Path(original_video_path).stem

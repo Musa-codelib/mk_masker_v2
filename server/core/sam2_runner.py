@@ -6,6 +6,7 @@ from PIL import Image
 from typing import Optional, List
 import shutil
 from utils.paths import resolve_sam2_checkpoint, resolve_sam2_config
+from utils.errors import EngineLoadError
 from hydra import compose, initialize_config_dir
 
 def _pick_device() -> torch.device:
@@ -24,7 +25,10 @@ class SAM2ImageAnnotator:
         from hydra.core.global_hydra import GlobalHydra
         if GlobalHydra.instance().is_initialized(): GlobalHydra.instance().clear()
         initialize_config_dir(config_dir=config_dir, version_base=None)
-        sam2 = build_sam2(config_name, str(checkpoint_path), device=self.device)
+        try:
+            sam2 = build_sam2(config_name, str(checkpoint_path), device=self.device)
+        except Exception as e:
+            raise EngineLoadError(f"SAM2 model failed to load ({variant}).", detail=str(e))
         self.predictor = SAM2ImagePredictor(sam2)
         self._current_frame_index = None
 
@@ -66,7 +70,10 @@ class SAM2VideoRunner:
         self.checkpoint_path = resolve_sam2_checkpoint(variant)
         config_dir = os.path.dirname(os.path.abspath(__file__))
         config_name = "sam2_hiera_s.yaml"
-        self.predictor = build_sam2_video_predictor(config_name, str(self.checkpoint_path), device=self.device)
+        try:
+            self.predictor = build_sam2_video_predictor(config_name, str(self.checkpoint_path), device=self.device)
+        except Exception as e:
+            raise EngineLoadError(f"SAM2 video model failed to load ({variant}).", detail=str(e))
 
     def run_bidirectional(self, frame_files, points_dict, labels_dict, output_dir, on_progress=None):
         """ ✅ 50-Frame Chunking with Hidden State Handoff """

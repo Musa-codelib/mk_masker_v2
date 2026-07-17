@@ -22,6 +22,7 @@ output_video/*
 __pycache__/
 *.py[cod]
 *$py.class
+.kilo/
 .pytest_cache/
 
 # Virtual Environments

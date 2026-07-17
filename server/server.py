@@ -12,6 +12,7 @@ from core.rvm_runner import RVMRunner
 from utils.paths import resolve_rvm_checkpoint
 from utils.video_handler import extract_frames, get_frame_base64
 from utils.export import ExportPipeline
+from utils.errors import as_mk_error, NoSelectionError
 
 logging.basicConfig(level=logging.INFO)
 sio = socketio.AsyncServer(async_mode='aiohttp', cors_allowed_origins='*')
@@ -85,9 +86,19 @@ async def handle_add_click(sid, data):
 async def handle_start_processing(sid, data):
     global CLICK_MEMORY, SELECTED_MODEL
     _, ai_run = _get_ai(); main_loop = asyncio.get_running_loop(); mode = data.get('format', 'prores')
+
     def on_prog(f, t):
         p = int((f/SESSION['total_frames'])*100)
         asyncio.run_coroutine_threadsafe(sio.emit('progress_update', {'percentage': p, 'message': f"Tracking... {f}/{SESSION['total_frames']}"}, to=sid), main_loop)
+
+    def on_phase(label):
+        asyncio.run_coroutine_threadsafe(sio.emit('phase_update', {'phase': label}, to=sid), main_loop)
+
+    def on_export_prog(f, t):
+        p = int((f/t)*100) if t else 0
+        asyncio.run_coroutine_threadsafe(sio.emit('progress_update', {'percentage': p, 'message': f"{label_hint} {f}/{t}"}, to=sid), main_loop)
+
+    label_hint = "Rendering"  # updated per phase below
 
     try:
         frame_files = sorted(list(SESSION['frames_dir'].glob("*.jpg")))
@@ -98,11 +109,12 @@ async def handle_start_processing(sid, data):
                 Image.fromarray(mask_np, mode="L").save(masks_dir / f"mask_{i:04d}.png")
                 if i % 5 == 0: on_prog(i, len(frame_files))
         else:
-            if not CLICK_MEMORY["points"]: raise ValueError("No selections found.")
-            
+            if not CLICK_MEMORY["points"]: raise NoSelectionError(
+                "No selections found. Click on the subject in the video before processing.")
+
             # ✅ FIX: Explicitly delete all UI preview masks so ExportPipeline doesn't hit weird artifacts
             for f in masks_dir.glob("mask_*.png"): f.unlink()
-            
+
             # The runner will now cleanly output mask_0000.png directly
             await main_loop.run_in_executor(None, ai_run.run_bidirectional, frame_files, CLICK_MEMORY["points"], CLICK_MEMORY["labels"], masks_dir, on_prog)
 
@@ -111,15 +123,25 @@ async def handle_start_processing(sid, data):
         render_temp = Path.home() / "Library/Caches/com.mkmasker.pro/render_temp"
         if render_temp.exists(): shutil.rmtree(render_temp)
         render_temp.mkdir(parents=True)
-        
+
         pipeline = ExportPipeline()
-        pipeline.render_matte_frames(masks_dir, render_temp)
-        if mode in ["prores", "balanced"]: pipeline.prepare_rgba_frames(SESSION['frames_dir'], render_temp, render_temp, SESSION['total_frames'])
-        final_file = pipeline.encode_video(render_temp, out_path, SESSION['fps'], mode)
+        label_hint = "Rendering alpha masks"
+        pipeline.render_matte_frames(masks_dir, render_temp, on_progress=on_export_prog, on_phase=on_phase)
+        if mode in ["prores", "balanced"]:
+            label_hint = "Preparing RGBA frames"
+            pipeline.prepare_rgba_frames(SESSION['frames_dir'], render_temp, render_temp, SESSION['total_frames'], on_progress=on_export_prog, on_phase=on_phase)
+        label_hint = f"Encoding {mode}"
+        final_file = pipeline.encode_video(render_temp, out_path, SESSION['fps'], mode, on_phase=on_phase)
         await sio.emit('process_complete', {'output_files': [str(final_file)]}, to=sid)
+        await sio.emit('phase_update', {'phase': 'Done'}, to=sid)
         shutil.rmtree(render_temp)
-        
+
     except Exception as e:
-        logging.error(f"Render Error: {e}"); await sio.emit('error_alert', {'message': str(e)}, to=sid)
+        err = as_mk_error(e)
+        logging.error(f"Render Error [{err.code}]: {err.user_message}")
+        if err.detail:
+            logging.error(f"Detail: {err.detail}")
+        await sio.emit('error_alert', err.to_payload(), to=sid)
+        await sio.emit('phase_update', {'phase': 'Error'}, to=sid)
 
 if __name__ == '__main__': web.run_app(app, port=8080)

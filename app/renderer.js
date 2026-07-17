@@ -12,6 +12,43 @@ const statusText = document.getElementById('status-text');
 const statusDot = document.getElementById('status-dot');
 const modelSelect = document.getElementById('model-select');
 
+// --- UI helpers (toast, overlay) ---
+function showToast(message, type = 'info', code = null) {
+    const host = document.getElementById('toast-host');
+    const el = document.createElement('div');
+    el.className = `toast toast-${type}`;
+    let html = `<div class="toast-msg">${escapeHtml(message)}</div>`;
+    if (code) html += `<div class="toast-code">[${escapeHtml(code)}]</div>`;
+    el.innerHTML = html;
+    host.appendChild(el);
+    // Animate in
+    requestAnimationFrame(() => el.classList.add('show'));
+    // Auto-dismiss after 6s (errors stay longer)
+    const ttl = type === 'error' ? 9000 : 5000;
+    setTimeout(() => {
+        el.classList.remove('show');
+        setTimeout(() => el.remove(), 300);
+    }, ttl);
+}
+
+function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => (
+        { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+    ));
+}
+
+function setLoading(on, label = 'Working…') {
+    const overlay = document.getElementById('loading-overlay');
+    if (!overlay) return;
+    overlay.querySelector('.loading-label').textContent = label;
+    overlay.style.display = on ? 'flex' : 'none';
+}
+
+function setPhase(label) {
+    const el = document.getElementById('phase-label');
+    if (el) el.textContent = label;
+}
+
 // Tell Python which AI model is selected (SAM2 vs RVM)
 modelSelect.addEventListener('change', () => {
     socket.emit('select_model', { model: modelSelect.value });
@@ -27,9 +64,22 @@ let currentVideoData = null;
 let currentVideoPath = null;
 let lastVideoFrameB64 = null; // THIS IS THE CURRENT BACKGROUND LAYER
 
-socket.on('connect', () => { statusDot.className = 'dot online'; statusText.innerText = 'AI Engine Online'; });
+socket.on('connect', () => {
+    statusDot.className = 'dot online';
+    statusText.innerText = 'AI Engine Online';
+    const banner = document.getElementById('offline-banner');
+    if (banner) banner.style.display = 'none';
+});
+
+socket.on('disconnect', () => {
+    statusDot.className = 'dot';
+    statusText.innerText = 'Engine offline';
+    const banner = document.getElementById('offline-banner');
+    if (banner) banner.style.display = 'flex';
+});
 
 socket.on('video_loaded', (data) => {
+    setLoading(false);
     currentVideoData = data;
     lastVideoFrameB64 = data.first_frame_b64;
     dropZone.style.display = 'none';
@@ -48,8 +98,8 @@ socket.on('frame_update', (data) => {
     renderCanvas(lastVideoFrameB64, null);
 });
 
-socket.on('mask_preview', (data) => { 
-    renderCanvas(lastVideoFrameB64, data.mask_alpha_b64); 
+socket.on('mask_preview', (data) => {
+    renderCanvas(lastVideoFrameB64, data.mask_alpha_b64);
 });
 
 socket.on('progress_update', (data) => {
@@ -58,13 +108,30 @@ socket.on('progress_update', (data) => {
     document.getElementById('progress-label').innerText = data.message;
 });
 
+socket.on('phase_update', (data) => {
+    setPhase(data.phase);
+    // Keep progress visible during processing phases
+    if (data.phase && data.phase !== 'Done' && data.phase !== 'Error') {
+        document.getElementById('progress-area').style.display = 'block';
+    }
+});
+
 socket.on('process_complete', (data) => {
-    alert("✨ Export Complete!\n\nLocation: " + data.output_files[0]);
+    setPhase('Done');
+    setLoading(false);
+    showToast(`✨ Export Complete!\n${data.output_files[0]}`, 'success');
     document.getElementById('progress-area').style.display = 'none';
     processBtn.disabled = false;
 });
 
-socket.on('error_alert', (data) => { alert("⚠️ AI Error: " + data.message); processBtn.disabled = false; });
+socket.on('error_alert', (data) => {
+    setLoading(false);
+    const code = data.code || 'ERROR';
+    const detail = data.detail ? `\n\n${data.detail}` : '';
+    showToast(`${data.message}${detail}`, 'error', code);
+    document.getElementById('progress-area').style.display = 'none';
+    processBtn.disabled = false;
+});
 
 document.addEventListener('dragover', (e) => { e.preventDefault(); e.stopPropagation(); dropZone.classList.add('active'); });
 document.addEventListener('dragleave', () => dropZone.classList.remove('active'));
@@ -75,6 +142,7 @@ document.addEventListener('drop', (e) => {
         const path = webUtils.getPathForFile(file);
         currentVideoPath = path;
         statusText.innerText = 'Extracting Video...';
+        setLoading(true, 'Extracting frames…');
         socket.emit('load_video', { path: path });
     }
 });
@@ -99,6 +167,8 @@ processBtn.addEventListener('click', () => {
     if (!currentVideoPath) return;
     const outputDir = currentVideoPath.substring(0, currentVideoPath.lastIndexOf('/'));
     processBtn.disabled = true;
+    setPhase('Starting…');
+    setLoading(true, 'Processing…');
     socket.emit('start_processing', { format: modeSelect.value, output_dir: outputDir });
 });
 
@@ -120,7 +190,7 @@ function renderCanvas(videoB64, maskAlphaB64) {
 }
 
 // --- NEW: SCRUBBER INTERACTION ---
-scrubber.oninput = () => { 
+scrubber.oninput = () => {
     const currentFrame = parseInt(scrubber.value);
     document.getElementById('frame-num').innerText = "Frame: " + currentFrame;
     // Tell Python to send the image for this frame index
