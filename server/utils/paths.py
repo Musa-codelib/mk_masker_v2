@@ -33,8 +33,13 @@ def resolve_rvm_checkpoint() -> Path:
             detail=f"Expected {path}")
     return path
 
-# Registry of supported SAM2 sizes. Currently only "small" ships with the app.
+# Registry of supported SAM2 sizes. "small" is the default; "tiny" is the lighter alternative.
 SAM2_MODELS: dict[str, dict] = {
+    "tiny": {
+        "cfg": "sam2.1_hiera_t.yaml",     # Hydra config for the SAM2.1 tiny model architecture
+        "filename": "sam2_hiera_tiny.pt", # Matching checkpoint file in checkpoints/
+        "label": "Tiny (Lite)",
+    },
     "small": {
         "cfg": "sam2_hiera_s.yaml",       # Hydra config for the model architecture
         "filename": "sam2_hiera_small.pt", # Matching checkpoint file in checkpoints/

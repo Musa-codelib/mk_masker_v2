@@ -34,7 +34,7 @@ class SAM2ImageAnnotator:
         self.device = _pick_device()
         checkpoint_path = resolve_sam2_checkpoint(variant)
         config_dir = os.path.dirname(os.path.abspath(__file__))
-        config_name = "sam2_hiera_s.yaml"
+        config_name = resolve_sam2_config(variant)
         from hydra.core.global_hydra import GlobalHydra
         if GlobalHydra.instance().is_initialized(): GlobalHydra.instance().clear()
         initialize_config_dir(config_dir=config_dir, version_base=None)
@@ -90,7 +90,10 @@ class SAM2VideoRunner:
         self.device = _pick_device()
         self.checkpoint_path = resolve_sam2_checkpoint(variant)
         config_dir = os.path.dirname(os.path.abspath(__file__))
-        config_name = "sam2_hiera_s.yaml"
+        config_name = resolve_sam2_config(variant)
+        from hydra.core.global_hydra import GlobalHydra
+        if GlobalHydra.instance().is_initialized(): GlobalHydra.instance().clear()
+        initialize_config_dir(config_dir=config_dir, version_base=None)
         try:
             self.predictor = build_sam2_video_predictor(config_name, str(self.checkpoint_path), device=self.device)
         except Exception as e:

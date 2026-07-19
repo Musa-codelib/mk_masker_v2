@@ -35,6 +35,7 @@ app = web.Application(); sio.attach(app)
 SESSION = {}
 CLICK_MEMORY = {"points": {}, "labels": {}}
 SELECTED_MODEL = "sam2"
+SELECTED_SAM2_VARIANT = "small"
 masks_dir = Path.home() / "Library/Caches/com.mkmasker.pro/masks"
 # Engine singletons, built lazily on first use (models are heavy to load).
 sam2_ann, sam2_run, rvm_run = None, None, None
@@ -45,11 +46,11 @@ def _get_ai():
     Builds the engine on first request and caches it so we don't reload weights on
     every interaction. For RVM the annotator is None (RVM needs no clicks).
     """
-    global sam2_ann, sam2_run, rvm_run
+    global sam2_ann, sam2_run, rvm_run, SELECTED_SAM2_VARIANT
     if SELECTED_MODEL == "sam2":
-        if sam2_ann is None:
-            sam2_ann = SAM2ImageAnnotator(variant="small")
-            sam2_run = SAM2VideoRunner(variant="small")
+        if sam2_ann is None or sam2_run is None:
+            sam2_ann = SAM2ImageAnnotator(variant=SELECTED_SAM2_VARIANT)
+            sam2_run = SAM2VideoRunner(variant=SELECTED_SAM2_VARIANT)
         return sam2_ann, sam2_run
     else:
         if rvm_run is None:
@@ -80,8 +81,17 @@ async def handle_load_video(sid, data):
 @sio.on('select_model')
 async def handle_select_model(sid, data):
     """Switch between SAM2 (click) and RVM (auto) engines."""
-    global SELECTED_MODEL
-    SELECTED_MODEL = data.get('model', 'sam2')
+    global SELECTED_MODEL, SELECTED_SAM2_VARIANT, sam2_ann, sam2_run
+    model = data.get('model', 'sam2-small')
+    if model == 'rvm':
+        SELECTED_MODEL = 'rvm'
+    else:
+        SELECTED_MODEL = 'sam2'
+        if model == 'sam2-tiny':
+            SELECTED_SAM2_VARIANT = 'tiny'
+        else:
+            SELECTED_SAM2_VARIANT = 'small'
+        sam2_ann, sam2_run = None, None
 
 @sio.on('request_frame')
 async def handle_request_frame(sid, data):

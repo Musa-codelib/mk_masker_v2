@@ -1,4 +1,11 @@
 Mk_Masker_v2/
+    ├── .kilo/
+    │   ├── plans/
+    │   │   ├── 1784312149698-ui-progress-errorhandling-plan.md
+    │   │   └── 1784498890423-sam2-lite-integration.md
+    │   ├── .gitignore
+    │   ├── package-lock.json
+    │   └── package.json
     ├── app/
     │   ├── index.html
     │   ├── main.js
@@ -9,15 +16,21 @@ Mk_Masker_v2/
     │   └── ffmpeg
     ├── checkpoints/
     │   ├── rvm_mobilenetv3.pth
-    │   └── sam2_hiera_small.pt
+    │   ├── sam2_hiera_small.pt
+    │   └── sam2_hiera_tiny.pt
     ├── input_video/
     ├── output_video/
     ├── server/
     │   ├── core/
     │   │   ├── rvm_runner.py
+    │   │   ├── sam2.1_hiera_t.yaml
     │   │   ├── sam2_hiera_s.yaml
+    │   │   ├── sam2_hiera_t.yaml
     │   │   └── sam2_runner.py
+    │   ├── tests/
+    │   │   └── smoke.py
     │   ├── utils/
+    │   │   ├── errors.py
     │   │   ├── export.py
     │   │   ├── paths.py
     │   │   ├── session.py

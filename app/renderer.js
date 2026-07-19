@@ -63,13 +63,15 @@ function setPhase(label) {
     if (el) el.textContent = label;
 }
 
-// Tell Python which AI model is selected (SAM2 vs RVM)
+// Tell Python which AI model is selected (SAM2 variant vs RVM)
 modelSelect.addEventListener('change', () => {
     socket.emit('select_model', { model: modelSelect.value });
     if (modelSelect.value === 'rvm') {
         statusText.innerText = 'Auto-Human Mode (No clicks needed)';
+    } else if (modelSelect.value === 'sam2-tiny') {
+        statusText.innerText = 'SAM2 Tiny Mode (Click to Track)';
     } else {
-        statusText.innerText = 'SAM2 Mode (Click to Track)';
+        statusText.innerText = 'SAM2 Small Mode (Click to Track)';
     }
 });
 
