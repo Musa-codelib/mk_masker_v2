@@ -25,6 +25,112 @@ const modeSelect = document.getElementById('mode');
 const statusText = document.getElementById('status-text');
 const statusDot = document.getElementById('status-dot');
 const modelSelect = document.getElementById('model-select');
+const setupWizard = document.getElementById('setup-wizard');
+const closeWizardBtn = document.getElementById('close-wizard-btn');
+const startDownloadBtn = document.getElementById('start-download-btn');
+const dlProgress = document.getElementById('dl-progress');
+const dlBar = document.getElementById('dl-bar');
+const dlStatus = document.getElementById('dl-status');
+const dlTiny = document.getElementById('dl-tiny');
+const dlSmall = document.getElementById('dl-small');
+
+// --- Setup Wizard ---
+function showWizard() {
+    setupWizard.style.display = 'flex';
+}
+
+function hideWizard() {
+    setupWizard.style.display = 'none';
+}
+
+closeWizardBtn.addEventListener('click', () => {
+    hideWizard();
+    showToast('You can download models later from the settings.', 'info');
+});
+
+async function checkModelsAndShowWizard() {
+    try {
+        const response = await new Promise((resolve) => {
+            socket.emit('get_model_status');
+            const handler = (data) => {
+                socket.off('model_status', handler);
+                resolve(data);
+            };
+            socket.on('model_status', handler);
+            setTimeout(() => {
+                socket.off('model_status', handler);
+                resolve(null);
+            }, 5000);
+        });
+
+        if (!response) return;
+
+        const models = response.models || {};
+        const hasAny = Object.values(models).some(m => m.downloaded);
+
+        if (!hasAny) {
+            showWizard();
+        }
+    } catch (e) {
+        console.error('Failed to check model status:', e);
+    }
+}
+
+startDownloadBtn.addEventListener('click', async () => {
+    const variants = [];
+    if (dlTiny.checked) variants.push('tiny');
+    if (dlSmall.checked) variants.push('small');
+
+    if (variants.length === 0) {
+        showToast('Please select at least one model to download.', 'error');
+        return;
+    }
+
+    startDownloadBtn.disabled = true;
+    dlProgress.style.display = 'block';
+
+    for (const variant of variants) {
+        await new Promise((resolve, reject) => {
+            dlStatus.innerText = `Downloading ${variant} model...`;
+            dlBar.style.width = '0%';
+
+            const handlers = {
+                progress: (data) => {
+                    if (data.variant === variant) {
+                        dlBar.style.width = data.percentage + '%';
+                        dlStatus.innerText = `Downloading ${variant}: ${data.percentage}%`;
+                    }
+                },
+                complete: (data) => {
+                    if (data.variant === variant) {
+                        socket.off('model_download_progress', handlers.progress);
+                        socket.off('model_download_complete', handlers.complete);
+                        socket.off('model_download_error', handlers.error);
+                        resolve();
+                    }
+                },
+                error: (data) => {
+                    if (data.variant === variant) {
+                        socket.off('model_download_progress', handlers.progress);
+                        socket.off('model_download_complete', handlers.complete);
+                        socket.off('model_download_error', handlers.error);
+                        reject(new Error(data.error));
+                    }
+                }
+            };
+
+            socket.on('model_download_progress', handlers.progress);
+            socket.on('model_download_complete', handlers.complete);
+            socket.on('model_download_error', handlers.error);
+            socket.emit('download_model', { variant });
+        });
+    }
+
+    dlStatus.innerText = 'All downloads complete!';
+    dlBar.style.width = '100%';
+    setTimeout(hideWizard, 1500);
+    startDownloadBtn.disabled = false;
+});
 
 // --- UI helpers (toast, overlay) ---
 function showToast(message, type = 'info', code = null) {
@@ -85,6 +191,7 @@ socket.on('connect', () => {
     statusText.innerText = 'AI Engine Online';
     const banner = document.getElementById('offline-banner');
     if (banner) banner.style.display = 'none';
+    checkModelsAndShowWizard();
 });
 
 socket.on('disconnect', () => {

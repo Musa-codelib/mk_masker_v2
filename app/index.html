@@ -4,14 +4,14 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Mk Masker Pro</title>
+    <title>Mk Masker V2.0</title>
     <style>
         :root {
             --bg: #121212;
             --panel: #1e1e1e;
             --panel-2: #262626;
             --border: #333;
-            --accent: #ffb700;
+            --accent: #e40f00;
             --accent-2: #2ecc71;
             --text: #f0f0f0;
             --muted: #888;
@@ -76,10 +76,13 @@
     </style>
 </head>
 <body>
-    <div id="offline-banner">⚠️ AI Engine offline — restart the Python server (python server.py)</div>
+    <div id="offline-banner">⚠️ AI Engine offline — please restart Mk Masker V2.0</div>
 
     <div id="sidebar">
-        <h1 style="margin: 0; color: var(--accent); font-size: 22px; letter-spacing: 0.5px;">Mk Pro</h1>
+        <div style="text-align: center; margin-bottom: 4px;">
+            <img src="logo.png" alt="Mk Masker V2.0" style="width: 150px; height: 150px; border-radius: 12px; object-fit: contain; background: var(--panel-2); padding: 4px;">
+            <h1 style="margin: 8px 0 0; color: var(--accent); font-size: 18px; letter-spacing: 0.5px;">Mk Masker V2.0</h1>
+        </div>
         <div class="status-bar"><div id="status-dot" class="dot"></div> <span id="status-text">Connecting to Engine...</span></div>
         <hr class="sep">
 
@@ -120,6 +123,46 @@
             <canvas id="v-canvas"></canvas>
             <input type="range" id="scrub" min="0" value="0">
             <div id="frame-num" style="margin-top: 10px; color: var(--muted); font-size: 12px;">Frame: 0</div>
+        </div>
+    </div>
+
+    <!-- Setup Wizard (shown on first launch if models missing) -->
+    <div id="setup-wizard" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.85); z-index: 2000; align-items: center; justify-content: center; flex-direction: column; gap: 20px;">
+        <div style="background: var(--panel); border: 1px solid var(--border); border-radius: 16px; padding: 40px; max-width: 500px; width: 90%; text-align: center; position: relative;">
+            <button id="close-wizard-btn" style="position: absolute; top: 12px; right: 12px; background: none; border: none; color: var(--muted); font-size: 22px; cursor: pointer; width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; transition: 0.2s;">✕</button>
+            <h2 style="margin: 0 0 10px; color: var(--accent); font-size: 24px;">Welcome to Mk Masker V2.0</h2>
+            <p style="color: var(--muted); margin: 0 0 25px; font-size: 14px;">
+                Before you can start masking videos, we need to download the AI models.
+                Choose the model(s) below based on your machine's capabilities.
+            </p>
+
+            <div style="text-align: left; background: var(--panel-2); border-radius: 10px; padding: 16px; margin-bottom: 20px;">
+                <label style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px; cursor: pointer;">
+                    <input type="checkbox" id="dl-tiny" checked style="width: 18px; height: 18px; accent-color: var(--accent);">
+                    <div>
+                        <div style="font-weight: 600; color: var(--text);">SAM2 Tiny (Lite)</div>
+                        <div style="font-size: 12px; color: var(--muted);">~38 MB — Best for older Macs, faster processing</div>
+                    </div>
+                </label>
+                <label style="display: flex; align-items: center; gap: 12px; cursor: pointer;">
+                    <input type="checkbox" id="dl-small" checked style="width: 18px; height: 18px; accent-color: var(--accent);">
+                    <div>
+                        <div style="font-weight: 600; color: var(--text);">SAM2 Small (Quality)</div>
+                        <div style="font-size: 12px; color: var(--muted);">~176 MB — Higher accuracy, needs more RAM</div>
+                    </div>
+                </label>
+            </div>
+
+            <button id="start-download-btn" style="background: linear-gradient(180deg, #34d978, #25a85f); color: #06210f; border: none; padding: 14px 28px; border-radius: 8px; font-weight: 700; font-size: 15px; cursor: pointer; width: 100%; transition: 0.2s;">
+                Download Selected Models
+            </button>
+
+            <div id="dl-progress" style="display: none; margin-top: 20px;">
+                <div style="background: #333; height: 8px; border-radius: 4px; overflow: hidden; margin-bottom: 8px;">
+                    <div id="dl-bar" style="width: 0%; height: 100%; background: linear-gradient(90deg, #2ecc71, #ffb700); transition: width 0.3s;"></div>
+                </div>
+                <div id="dl-status" style="font-size: 13px; color: var(--muted);">Preparing...</div>
+            </div>
         </div>
     </div>
 

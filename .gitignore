@@ -17,7 +17,27 @@ output_video/*
 
 
 # ==========================================
-# 2. Python Environment & Junk (Server)
+# 2. Build Artifacts & Installer Output
+# ==========================================
+# Electron builder output (contains .app, .pkg, .dmg)
+dist/
+build/
+
+# Packaging payload (staging area for pkgbuild)
+PKG_Install/
+
+# Installer logs and temp files
+*.log
+/tmp/mk_masker_pro_install*
+
+# macOS packages and disk images
+*.pkg
+*.dmg
+*.icns
+
+
+# ==========================================
+# 3. Python Environment & Junk (Server)
 # ==========================================
 __pycache__/
 *.py[cod]
@@ -32,10 +52,11 @@ ENV/
 
 
 # ==========================================
-# 3. Node.js & Frontend Junk (App)
+# 4. Node.js & Frontend Junk (App)
 # ==========================================
 app/node_modules/
 node_modules/
+kvn-rotoscope-reverse
 input_video/
 output_video/
 .eslintcache
@@ -43,7 +64,7 @@ output_video/
 
 
 # ==========================================
-# 4. OS/IDE Specific
+# 5. OS/IDE Specific
 # ==========================================
 .DS_Store
 .DS_Store?

@@ -1,12 +1,42 @@
 {
-  "name": "mk-masker-pro-ui",
+  "name": "mk-masker-v2",
   "version": "2.0.0",
   "main": "main.js",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "build": "electron-builder --mac --dir",
+    "build:pkg": "electron-builder --mac --pkg"
+  },
+  "build": {
+    "appId": "com.mkmasker.v2",
+    "productName": "Mk Masker V2.0",
+    "icon": "../logo.png",
+    "files": [
+      "**/*",
+      "!server/**",
+      "!node_modules/**/{test,__tests__,tests,example,examples}/**"
+    ],
+    "extraResources": [
+      {
+        "from": "../server",
+        "to": "server"
+      },
+      {
+        "from": "../bin/ffmpeg",
+        "to": "bin/ffmpeg"
+      },
+      {
+        "from": "../logo.png",
+        "to": "logo.png"
+      }
+    ],
+    "asar": true
+  },
+  "devDependencies": {
+    "electron": "^41.7.1",
+    "electron-builder": "^26.15.3"
   },
   "dependencies": {
-    "electron": "^41.7.1",
     "socket.io-client": "^4.8.3"
   }
 }
