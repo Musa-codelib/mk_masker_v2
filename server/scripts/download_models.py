@@ -33,18 +33,19 @@ def get_weights_dir() -> Path:
     Uses the same resolution logic as server/utils/paths.py so the wizard,
     the server, and the installer all agree on where models live:
       1. MK_MASKER_WEIGHTS_DIR env var
-      2. ~/Library/Caches/com.mkmasker.pro/weights (production, only if non-empty)
-      3. <project_root>/checkpoints (local dev)
+      2. <project_root>/checkpoints (local dev — repo ships with models)
+      3. ~/Library/Caches/com.mkmasker.pro/weights (production / packaged app)
     """
     override = os.environ.get("MK_MASKER_WEIGHTS_DIR")
     if override:
         return Path(override).expanduser()
 
-    prod_dir = Path.home() / "Library/Caches/com.mkmasker.pro/weights"
-    if prod_dir.exists() and any(prod_dir.glob("*.pt")) or any(prod_dir.glob("*.pth")):
-        return prod_dir
+    checkpoints = Path(__file__).resolve().parent.parent.parent / "checkpoints"
+    if checkpoints.exists():
+        return checkpoints
 
-    return Path(__file__).resolve().parent.parent.parent / "checkpoints"
+    prod_dir = Path.home() / "Library/Caches/com.mkmasker.pro/weights"
+    return prod_dir
 
 
 def download_model(variant: str, on_progress=None) -> Path:
