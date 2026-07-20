@@ -21,7 +21,18 @@ def get_data_dir() -> Path:
     return get_project_root() / "data"
 
 def get_weights_dir() -> Path:
-    # Model checkpoints (.pt / .pth) are stored in the repo's checkpoints/ folder.
+    # Model checkpoints (.pt / .pth) resolution order:
+    #   1. MK_MASKER_WEIGHTS_DIR env var override (production installer sets this)
+    #   2. ~/Library/Caches/com.mkmasker.pro/weights (production / packaged app)
+    #   3. <project_root>/checkpoints (local development)
+    override = os.environ.get("MK_MASKER_WEIGHTS_DIR")
+    if override:
+        return Path(override).expanduser()
+
+    prod_dir = Path.home() / "Library/Caches/com.mkmasker.pro/weights"
+    if prod_dir.exists() and any(prod_dir.glob("*.pt")) or any(prod_dir.glob("*.pth")):
+        return prod_dir
+
     return get_project_root() / "checkpoints"
 
 def resolve_rvm_checkpoint() -> Path:

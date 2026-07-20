@@ -22,6 +22,7 @@ from utils.paths import resolve_rvm_checkpoint
 from utils.video_handler import extract_frames, get_frame_base64
 from utils.export import ExportPipeline
 from utils.errors import as_mk_error, NoSelectionError
+from scripts.download_models import download_model, list_models, MODELS
 
 logging.basicConfig(level=logging.INFO)
 sio = socketio.AsyncServer(async_mode='aiohttp', cors_allowed_origins='*')
@@ -194,5 +195,57 @@ async def handle_start_processing(sid, data):
             logging.error(f"Detail: {err.detail}")
         await sio.emit('error_alert', err.to_payload(), to=sid)
         await sio.emit('phase_update', {'phase': 'Error'}, to=sid)
+
+@sio.on('get_model_status')
+async def handle_get_model_status(sid):
+    """Return download status for all SAM2 models."""
+    try:
+        models = list_models()
+        await sio.emit('model_status', {'models': models}, to=sid)
+    except Exception as e:
+        await sio.emit('error_alert', {
+            'code': 'MODEL_STATUS_ERROR',
+            'message': str(e),
+            'detail': None
+        }, to=sid)
+
+@sio.on('download_model')
+async def handle_download_model(sid, data):
+    """Download a SAM2 model checkpoint."""
+    variant = data.get('variant')
+    if not variant or variant not in MODELS:
+        await sio.emit('error_alert', {
+            'code': 'INVALID_MODEL',
+            'message': f"Invalid model variant: {variant}",
+            'detail': f"Valid variants: {list(MODELS.keys())}"
+        }, to=sid)
+        return
+
+    try:
+        await sio.emit('model_download_start', {'variant': variant}, to=sid)
+        loop = asyncio.get_running_loop()
+
+        def on_progress(downloaded, total):
+            pct = int(downloaded * 100 / total) if total > 0 else 0
+            asyncio.run_coroutine_threadsafe(
+                sio.emit('model_download_progress', {
+                    'variant': variant,
+                    'percentage': pct,
+                    'downloaded': downloaded,
+                    'total': total
+                }, to=sid),
+                loop
+            )
+
+        path = await loop.run_in_executor(None, download_model, variant, on_progress)
+        await sio.emit('model_download_complete', {
+            'variant': variant,
+            'path': str(path)
+        }, to=sid)
+    except Exception as e:
+        await sio.emit('model_download_error', {
+            'variant': variant,
+            'error': str(e)
+        }, to=sid)
 
 if __name__ == '__main__': web.run_app(app, port=8080)
