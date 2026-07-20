@@ -55,6 +55,7 @@ ENV/
 # 4. Node.js & Frontend Junk (App)
 # ==========================================
 app/node_modules/
+app/dist/
 node_modules/
 kvn-rotoscope-reverse
 input_video/
